@@ -12,8 +12,8 @@ CLAS finds the most important edges in Transformer models. It is a lightweight v
     5. generalized metric
    
   - Repo functionality:
-    1. Compute general metric from logits **or intermediate activations**
-    2. Compute edge attribution scores across different positions
+    1. Compute general metric from logits **or intermediate activations** (to answer questions like: “Which edges contribute most to a specific direction in the residual stream at some intermediate layer?“)
+    2. Compute edge attribution scores across different positions (to answer questions like: "Does the token *bomb* at some middle position in the prompt have a high impact on the final position?")
   
    
 ## Further Objectives to implement either here or in the ACDC & Transformerlens libraries
