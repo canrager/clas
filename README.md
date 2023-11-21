@@ -1,6 +1,6 @@
 # Circuit-Level Activation Steering (CLAS)
 
-CLAS identifies circuits in LLMs and manipulates them. It is based on:
+CLAS identifies circuits in LLMs and manipulates them. (Currently supporting `TransformerLens` models only.) It is based on:
 - Edge Attribution Patching (https://arxiv.org/abs/2310.10348)
 - Automatic Circuit Discovery (https://arxiv.org/abs/2304.14997)
 - Activation Steering (https://arxiv.org/abs/2308.10248)
