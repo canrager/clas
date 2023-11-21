@@ -1,30 +1,21 @@
 # Circuit-Level Activation Steering (CLAS)
 
-CLAS finds the most important edges in Transformer models. It is a lightweight version of the [ACDC framework](https://github.com/ArthurConmy/Automatic-Circuit-Discovery). Further features may include a researcher-friendly interface for activation steering.
+CLAS identifies circuits in LLMs and manipulates them. It is based on:
+- Edge Attribution Patching (https://arxiv.org/abs/2310.10348)
+- Automatic Circuit Discovery (https://arxiv.org/abs/2304.14997)
+- Activation Steering (https://arxiv.org/abs/2308.10248)
 
 ## Objectives
-1. Automate Edge Attribution Patching
-  - User input:
-    1. clean_ds: context + feature
-    2. corr_ds: context w/o feature
-    3. HuggingFace / TransformerLens model with hooks
-    4. list of upstream nodes and downstream nodes
-    5. generalized metric
-   
-  - Repo functionality:
-    1. Compute general metric from logits **or intermediate activations** (to answer questions like: “Which edges contribute most to a specific direction in the residual stream at some intermediate layer?“)
-    2. Compute edge attribution scores across different positions (to answer questions like: "Does the token *bomb* at some middle position in the prompt have a high impact on the final position?")
-  
-   
-## Further Objectives to implement either here or in the ACDC & Transformerlens libraries
-1. Object with all relevant edges (already part of ACDC)
-2. Plotting edges above threshold (web-based only, could be added to ACDC)
-3. Activation Steering (could be added to TransformerLens)
-  - User input:
-    1. List of edges
-    2. Activation vector
+### Efficient EAP implementation
+Oscar implemented EAP by having a very big tensor of activation differences between clean and corrupted activations that we write and read from. We calculate the EAP scores during the backward pass to save memory and only store the difference between positive and negative activations instead of storing both.
 
-  - Repo functionality: Abstract away the localization of hooks and positions to enable forward passes with
-    1. Pruining (zero or mean ablation)
-    2. Activation Steering (at arbitrary layers and sequence positions)
+TODOs
+- [ ] Consider Attn -> MLP edges of the same layer
+- [ ] Positional EAP: Compute edge attribution scores across different positions (to answer questions like: "Does the token *bomb* at some middle position in the prompt have a high impact on the final position?")
+- [ ] Graph plotting (use ACDC functionality or web-based approach?)
+- [ ] Generalize Metric: Compute general metric from logits **or intermediate activations** (to answer questions like: “Which edges contribute most to a specific direction in the residual stream at some intermediate layer?“
+- [ ] Activation steering: Abstract away the localization of hooks and positions to enable forward passes with
+    1. Activation Steering (at arbitrary layers and sequence positions)
+    2. Ablation (zero / mean)
+    3. Custom Steering vector
 
