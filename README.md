@@ -1,15 +1,16 @@
 # Circuit-Level Activation Steering (CLAS)
 
-CLAS identifies circuits in LLMs and manipulates them. (Currently supporting `TransformerLens` models only.) It is based on:
+CLAS identifies circuits in LLMs and manipulates them. It is based on:
 - Edge Attribution Patching (https://arxiv.org/abs/2310.10348)
 - Automatic Circuit Discovery (https://arxiv.org/abs/2304.14997)
 - Activation Steering (https://arxiv.org/abs/2308.10248)
 
-## Objectives
-### Efficient EAP implementation
-Oscar implemented EAP by having a very big tensor of activation differences between clean and corrupted activations that we write and read from. We calculate the EAP scores during the backward pass to save memory and only store the difference between positive and negative activations instead of storing both.
+Currently supporting `TransformerLens` models only.
 
-TODOs
+## Current state
+See [demo notebook](https://github.com/canrager/clas/blob/main/first_implementation_demo/demo.ipynb). Oscar implemented EAP by having a very big tensor of activation differences between clean and corrupted activations that we write and read from. We calculate the EAP scores during the backward pass to save memory and only store the difference between positive and negative activations instead of storing both. 
+
+## TODOs
 - [ ] Consider Attn -> MLP edges of the same layer
 - [ ] Positional EAP: Compute edge attribution scores across different positions (to answer questions like: "Does the token *bomb* at some middle position in the prompt have a high impact on the final position?")
 - [ ] Graph plotting (use ACDC functionality or web-based approach?)
