@@ -1,6 +1,13 @@
+import einops
+from torch import Tensor
 from typing import Tuple, Literal, Optional
-from transformer_lens import ActivationCache
+from transformer_lens import ActivationCache, HookedTransformer
 
+
+def split_layers_and_heads(act: Tensor, model: HookedTransformer) -> Tensor:
+    return einops.rearrange(act, '(layer head) batch seq d_model -> layer head batch seq d_model',
+                            layer=model.cfg.n_layers,
+                            head=model.cfg.n_heads)
 
 def get_3_caches(
     model,

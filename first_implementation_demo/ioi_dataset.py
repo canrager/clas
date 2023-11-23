@@ -1,3 +1,7 @@
+"""
+This file is copied from the ACDC repository: https://github.com/ArthurConmy/Automatic-Circuit-Discovery/tree/main 
+"""
+
 from typing import Union, List, Optional
 import warnings
 import torch as t
@@ -711,7 +715,8 @@ class IOIDataset:
             prepend_bos=self.prepend_bos,
             manual_word_idx=self.word_idx,
             has_been_flipped=True,
-            seed=seed
+            seed=seed,
+            device=self.device
         )
         return flipped_ioi_dataset
 
@@ -722,6 +727,7 @@ class IOIDataset:
             tokenizer=self.tokenizer,
             prompts=self.ioi_prompts.copy(),
             prefixes=self.prefixes.copy() if self.prefixes is not None else self.prefixes,
+            device=self.device
         )
         return copy_ioi_dataset
 
@@ -734,6 +740,7 @@ class IOIDataset:
             prompts=sliced_prompts,
             prefixes=self.prefixes,
             prepend_bos=self.prepend_bos,
+            device=self.device,
         )
         return sliced_dataset
 

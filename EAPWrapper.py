@@ -1,13 +1,16 @@
-import torch
 import gc
 import numpy as np
-from transformer_lens import HookedTransformer, ActivationCache
+import einops
+import torch
 from torch import Tensor
+from transformer_lens import HookedTransformer, ActivationCache
+from functools import partial
 from jaxtyping import Float, Bool, Int
 from typing import List, Callable, Tuple, Union, Dict, Optional
-import einops
 
-class ModelWrapper:
+import psutil
+
+class EAPWrapper:
     def __init__(self, model):
         self.model = model
 
@@ -20,12 +23,27 @@ class ModelWrapper:
         self.d_model = self.model.cfg.d_model
         self.dtype = self.model.cfg.dtype
         self.device = self.model.cfg.device
+        self.element_size = torch.empty((0), device=self.device, dtype=self.dtype).element_size()
 
         self.valid_upstream_node_types = ["resid_pre", "mlp", "head"]
         self.valid_downstream_node_types = ["resid_post", "mlp", "head"]
 
         self.valid_upstream_hook_types = ["hook_resid_pre", "hook_result", "hook_mlp_out"]
         self.valid_downstream_hook_types = ["hook_q_input", "hook_k_input", "hook_v_input", "hook_mlp_in", "hook_resid_post"]
+
+        # TODO valid_upstream_hook_types and upstream_component_ordering can be merged into one data structure
+        self.upstream_component_ordering = {
+            "hook_resid_pre": 0,
+            "hook_result": 1,
+            "hook_mlp_out": 2,
+        }
+        self.downstream_component_ordering = {
+            "hook_q_input": 0,
+            "hook_k_input": 1,
+            "hook_v_input": 2,
+            "hook_mlp_in": 3,
+            "hook_resid_post": 4
+        }
 
         self.upstream_nodes = []
         self.downstream_nodes = []
@@ -86,7 +104,7 @@ class ModelWrapper:
                 self.upstream_nodes.append(f"resid_pre.{layer}")
                 self.upstream_node_index[f"resid_pre.{layer}"] = upstream_node_index
                 self.upstream_hook_slice[hook_name] = slice(upstream_node_index, upstream_node_index + 1)
-                self.upstream_nodes_before_attn_in_layer[layer] = slice(0, upstream_node_idx + 1)
+                self.upstream_nodes_before_attn_layer[layer] = slice(0, upstream_node_index + 1)
                 upstream_node_index += 1
 
             elif hook_type == "hook_result":
@@ -94,7 +112,7 @@ class ModelWrapper:
                     self.upstream_nodes.append(f"head.{layer}.{head_idx}")
                     self.upstream_node_index[f"head.{layer}.{head_idx}"] = upstream_node_index + head_idx
                 self.upstream_hook_slice[hook_name] = slice(upstream_node_index, upstream_node_index + self.n_heads)
-                self.upstream_nodes_before_mlp_in_layer[layer] = slice(0, upstream_node_idx + self.n_heads)
+                self.upstream_nodes_before_mlp_layer[layer] = slice(0, upstream_node_index + self.n_heads)
                 upstream_node_index += self.n_heads 
 
             elif hook_type == "hook_mlp_out":
@@ -146,7 +164,7 @@ class ModelWrapper:
         self.n_upstream_nodes = len(self.upstream_nodes)
         self.n_downstream_nodes = len(self.downstream_nodes)
 
-        activations_tensor_in_gb = self.n_upstream_nodes * self.d_model * self.dtype.itemsize / 2**30 
+        activations_tensor_in_gb = self.n_upstream_nodes * self.d_model * self.element_size / 2**30 
         print(f"Saving activations requires {activations_tensor_in_gb:.4f} GB of memory per token")
 
     # given a set of upstream nodes and downstream nodes, this function returns the corresponding hooks
@@ -219,43 +237,44 @@ class ModelWrapper:
         upstream_hooks = list(set(upstream_hooks))
         downstream_hooks = list(set(downstream_hooks))
 
-        component_ordering = {
-            # upstream
-            "hook_resid_pre": 0,
-            "hook_result": 1,
-            "hook_mlp_out": 2,
-            # downstream
-            "hook_q_input": 0,
-            "hook_k_input": 1,
-            "hook_v_input": 2,
-            "hook_mlp_in": 3,
-            "hook_resid_post": 4
-        }
+        # def hook_comparison_fn(hook_a, hook_b):
+        #     layer_a = int(hook_a.split(".")[1])
+        #     layer_b = int(hook_b.split(".")[1])
+        #     if layer_a != layer_b:
+        #         return layer_a < layer_b
+        #     hook_type_a = hook_a.split(".")[-1]
+        #     hook_type_b = hook_b.split(".")[-1]
+        #     assert hook_type_a != hook_type_b, "Hooks are duplicated"
+        #     return component_ordering[hook_type_a] < component_ordering[hook_type_b]
+        # # then use functools.cmp_to_key for sorting
+        
 
-        def comparison_fn(hook_a, hook_b):
-            layer_a = int(hook_a.split(".")[1])
-            layer_b = int(hook_b.split(".")[1])
-            if layer_a != layer_b:
-                return layer_a < layer_b
-            hook_type_a = hook_a.split(".")[-1]
-            hook_type_b = hook_b.split(".")[-1]
-            assert hook_type_a != hook_type_b, "Hooks are duplicated"
-            return component_ordering[hook_type_a] < component_ordering[hook_type_b]
+        def get_hook_level(hook, component_ordering):
+            # Function for differentiating the order of computation in between layers, e.g. attn_layer2 is before mlp_layer2
+            num_components_per_layer = len(component_ordering)
+            layer = int(hook.split(".")[1])
+            hook_type = hook.split(".")[-1]
+            component_order = component_ordering[hook_type]
+            level = layer * num_components_per_layer + component_order
+            return level
+
+        get_upstream_hook_level = partial(get_hook_level, component_ordering=self.upstream_component_ordering)
+        get_downstream_hook_level = partial(get_hook_level, component_ordering=self.downstream_component_ordering)
 
         # we sort the hooks by the order in which they appear in the computation
-        upstream_hooks = sorted(upstream_hooks, cmp=hook_comparison_fn)
-        downstream_hooks = sorted(downstream_hooks, cmp=hook_comparison_fn)
+        upstream_hooks = sorted(upstream_hooks, key=get_upstream_hook_level)
+        downstream_hooks = sorted(downstream_hooks, key=get_downstream_hook_level)
 
         return upstream_hooks, downstream_hooks
 
     def get_slice_previous_upstream_nodes(self, downstream_hook):
-        layer = downstream_hook.layer
+        layer = downstream_hook.layer()
         hook_type = downstream_hook.name.split(".")[-1]
-        if hook_type == "hook_resid_post":
-            return self.upstream_nodes_before_layer[layer + 1]
+        # if hook_type == "hook_resid_post":
+        #     return self.upstream_nodes_before_layer[layer + 1]
         if hook_type == "hook_mlp_in":
             return self.upstream_nodes_before_mlp_layer[layer]
-        elif hook_type in ["hook_q_input", "hook_k_input", "hook_v_input"]:
+        elif hook_type in ["hook_q_input", "hook_k_input", "hook_v_input", "hook_resid_post"]:
             return self.upstream_nodes_before_layer[layer]
         else:
             raise NotImplementedError("Invalid upstream hook type")
@@ -271,10 +290,10 @@ class ModelWrapper:
         assert seq_len == corrupted_tokens.shape[1], "Sequence length mismatch"
         assert batch_size == corrupted_tokens.shape[0], "Batch size mismatch"
 
-        activations_diff_in_gb = batch_size * seq_len * self.n_upstream_nodes * self.d_model * self.dtype.itemsize / 2**30 
+        activations_diff_in_gb = batch_size * seq_len * self.n_upstream_nodes * self.d_model * self.element_size / 2**30 
         memory_allocated_in_gb = torch.cuda.memory_allocated() / 2**30
-        total_memory_in_gb = torch.cuda.get_device_properties(self.device).total_memory / 2**30
         print(f"Saving activation differences requires {activations_diff_in_gb:.2f} GB of memory")
+        total_memory_in_gb = psutil.virtual_memory().total / 2**30
         assert activations_diff_in_gb < total_memory_in_gb - memory_allocated_in_gb, "Not enough memory to store activation differences"
 
         self.model.reset_hooks()
@@ -409,9 +428,9 @@ class ModelWrapper:
         assert seq_len == corrupted_tokens.shape[1], "Sequence length mismatch"
         assert batch_size == corrupted_tokens.shape[0], "Batch size mismatch"
 
-        activations_diff_in_gb = batch_size * seq_len * self.n_upstream_nodes * self.d_model * self.dtype.itemsize / 2**30 
+        activations_diff_in_gb = batch_size * seq_len * self.n_upstream_nodes * self.d_model * self.element_size / 2**30 
         memory_allocated_in_gb = torch.cuda.memory_allocated() / 2**30
-        total_memory_in_gb = torch.cuda.get_device_properties(self.device).total_memory / 2**30
+        total_memory_in_gb = psutil.virtual_memory().total / 2**30
         print(f"Saving activation differences requires {activations_diff_in_gb:.2f} GB of memory")
         assert activations_diff_in_gb < total_memory_in_gb - memory_allocated_in_gb, "Not enough memory to store activation differences"
 
